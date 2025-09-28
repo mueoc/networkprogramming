@@ -1,15 +1,25 @@
-#include<stdio.h>
-#include<sys/types.h>//socket
-#include<sys/socket.h>//socket
-#include<string.h>//memset
-#include<stdlib.h>//sizeof
-#include<netinet/in.h>//INADDR_ANY
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <netinet/in.h> // För sockaddr_in
+#include <sys/socket.h> // För socket-funktioner
+#include <arpa/inet.h>  // För inet_pton, inet_ntoa m.m.
+#include <unistd.h>
+#include <iostream>
 #include <arpa/inet.h> // MAC inet_ntop
-#include <unistd.h> // MAC fork
+/* You will to add includes here */
 
-#define PORT 4950
-#define MAXSZ 1400
-int childCnt;
+
+// Included to get the support library
+#include <calcLib.h>
+
+// Enable if you want debugging to be printed, see examble below.
+// Alternative, pass CFLAGS=-DDEBUG to make, make CFLAGS=-DDEBUG
+#define DEBUG
+
+
+using namespace std;
+
 
 void *get_in_addr(struct sockaddr *sa)
 {
@@ -20,102 +30,121 @@ void *get_in_addr(struct sockaddr *sa)
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-
-//Convert a struct sockaddr address to a string, IPv4 and IPv6:
-
 char *get_ip_str(const struct sockaddr *sa, char *s, size_t maxlen)
 {
-    switch(sa->sa_family) {
-        case AF_INET:
-            inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr),
-                    s, maxlen);
-            break;
+  switch(sa->sa_family)
+  {
+    case AF_INET:
+        inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr),
+          s, maxlen);
+        break;
 
-        case AF_INET6:
-            inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)sa)->sin6_addr),
-                    s, maxlen);
-            break;
+    case AF_INET6:
+        inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)sa)->sin6_addr),
+          s, maxlen);
+        break;
 
-        default:
-            strncpy(s, "Unknown AF", maxlen);
-            return NULL;
-    }
+    default:
+      strncpy(s, "Unknown AF", maxlen);
+      return NULL;
+  }
 
-    return s;
+  return s;
 }
 
-int main()
-{
- int listenfd;//to create socket
- int connfd;//to accept connection
- childCnt=0;
- 
- struct sockaddr_in serverAddress;//server receive on this address
- struct sockaddr_in clientAddress;//server sends to client on this address
- struct sockaddr_storage their_addr;
- 
- int n;
- char msg[MAXSZ];
- int clientAddressLength;
- int pid;
-
- char cli[INET6_ADDRSTRLEN];
- char s[INET6_ADDRSTRLEN];
-
+int main(int argc, char *argv[]){
+  if (argc < 2) {
+    fprintf(stderr, "Usage: %s protocol://server:port/path.\n", argv[0]);
+    exit(EXIT_FAILURE);
+  }
   
- memset(msg,'A',MAXSZ);
- msg[MAXSZ-1]='\n';
- 
- 
- //create socket
- listenfd=socket(AF_INET,SOCK_STREAM,0);
- //initialize the socket addresses
- memset(&serverAddress,0,sizeof(serverAddress));
- serverAddress.sin_family=AF_INET;
- serverAddress.sin_addr.s_addr=htonl(INADDR_ANY);
- serverAddress.sin_port=htons(PORT);
+  char *input = argv[1];
+  char *sep = strchr(input, ':');
+  
+  if (!sep) {
+    fprintf(stderr, "Error: input must be in host:port format\n");
+    return 1;
+  }
+  
+  // Allocate buffers big enough
+  char hoststring[256];
+  char portstring[64];
+  
+  // Copy host part
+  size_t hostlen = sep - input;
+  if (hostlen >= sizeof(hoststring)) {
+    fprintf(stderr, "Error: hostname too long\n");
+    return 1;
+  }
+  strncpy(hoststring, input, hostlen);
+  hoststring[hostlen] = '\0';
+  
+  // Copy port part
+  strncpy(portstring, sep + 1, sizeof(portstring) - 1);
+  portstring[sizeof(portstring) - 1] = '\0';
+  
+  printf("TCP server on: %s:%s\n", hoststring,portstring);
 
- //bind the socket with the server address and port
- bind(listenfd,(struct sockaddr *)&serverAddress, sizeof(serverAddress));
+  int sockfd, connfd, len, childCount, pid, n;
+  struct sockaddr_in servaddr, cliaddr;
 
- //listen for connection from client
- listen(listenfd,5);
+  if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1){
+    perror("socket creation failed...\n");
+    exit(1);
+  }
 
- while(1) {
-   //parent process waiting to accept a new connection
-   printf("\n*****server waiting for new client connection:*****\n");
-   clientAddressLength=sizeof(clientAddress);
-   connfd=accept(listenfd,(struct sockaddr*)&clientAddress,&clientAddressLength);
-   printf("accept = %d \n", connfd );
-   //printf("connected to client: %s\n",inet_ntoa(clientAddress.sin_addr));
-   childCnt++;
-   
-   printf("listener: got packet from %s:%d\n",
-	  inet_ntop(clientAddress.sin_family,
-		    get_in_addr((struct sockaddr *)&clientAddress),
-		    s, sizeof s),ntohs(clientAddress.sin_port));
-   
-   //child process is created for serving each new clients
-   pid=fork();
-   if(pid==0)//child process rec and send
-     {
-       //rceive from client
-       get_ip_str((struct sockaddr*)&clientAddress,&cli,(size_t)&clientAddressLength);
+  memset(&servaddr, 0, sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  servaddr.sin_port = htons(atoi(portstring));
+  if((bind(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr))) != 0){
+    perror("socket bind failed...\n");
+    exit(0);
+  }
+
+  if((listen(sockfd, 5)) != 0){
+    perror("Listen failed...\n");
+    exit(0);
+  }
+
+  while(1) {
+    std::cout << "boring 3 " << std::endl;
+
+    memset(&cliaddr, 0, sizeof(cliaddr));
+    len = sizeof(cliaddr);
+    if((connfd = accept(sockfd, (struct sockaddr*)&cliaddr, (socklen_t*)&len))<0){
+      perror("server accept failed...\n");
+      exit(0);
+    }
+    childCount++;
+    std::cout << "boring 4 " << std::endl;
+
+
+    printf("listener: got packet from %s:%d\n", inet_ntop(cliaddr.sin_family,
+       get_in_addr((struct sockaddr*)&cliaddr), hoststring, sizeof(hoststring)), ntohs(cliaddr.sin_port));
        
-       printf("Child[%d] (%s:%d): recv(%d) .\n", childCnt,cli,ntohs(clientAddress.sin_port),n);
-       while(1){
-	 n=send(connfd,msg,MAXSZ,0);	 
-	 printf("Child[%d] (%s:%d): Sent (%d) .\n", childCnt,cli,ntohs(clientAddress.sin_port),n);
-	 sleep(1);
-	 
-       }//close interior while
-       exit(0);
-     }
-   else {
-     printf("Parent, close connfd().\n");
-     close(connfd);//sock is closed BY PARENT
-   }
- }//close exterior while
- 
- return 0;
+    pid = fork();
+    if (pid == 0) {
+      get_ip_str((struct sockaddr*)&cliaddr, hoststring, sizeof(hoststring));
+      std::cout << "Child " << childCount << " handling client " << hoststring << ":" << ntohs(cliaddr.sin_port) << std::endl;
+      char bufferText[1024];
+      while(1)
+      {
+        n = send(connfd,bufferText,strlen(bufferText),0);
+        if (n < 0) {
+          perror("ERROR writing to socket");
+          exit(1);
+        }
+        std::cout << "Child " << childCount << " waiting for input from client " << hoststring << ":" << ntohs(cliaddr.sin_port) << std::endl;
+        sleep(1);
+      }
+      exit(0);
+    }
+    else 
+    {
+      close(connfd);
+    }
+    close(connfd);
+  }
+  return 0;
 }
